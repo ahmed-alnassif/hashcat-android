@@ -24,35 +24,49 @@ jobs:
       - name: Checkout hashcat-android repo
         uses: actions/checkout@v4
 
-      - name: Setup Android NDK
-        uses: android-actions/setup-android-ndk@v2
-        with:
-          ndk-version: '26.2.11394342'
+      - name: Download Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+          unzip -q android-ndk-r26b-linux.zip
+          echo "NDK_HOME=$(pwd)/android-ndk-r26b" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r26b" >> $GITHUB_ENV
 
       - name: Setup Android Toolchain
         run: |
-          # Set up environment variables
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
-          echo "CC=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.clang_target }}-clang" >> $GITHUB_ENV
-          echo "CXX=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.clang_target }}-clang++" >> $GITHUB_ENV
-          echo "AR=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
-          echo "STRIP=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" >> $GITHUB_ENV
+          echo "CC=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.clang_target }}-clang" >> $GITHUB_ENV
+          echo "CXX=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.clang_target }}-clang++" >> $GITHUB_ENV
+          echo "AR=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+          echo "STRIP=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" >> $GITHUB_ENV
+          echo "RANLIB=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> $GITHUB_ENV
 
       - name: Build hashcat for Android
         run: |
           cd hashcat
           
           # Set Android-specific flags
-          export CFLAGS="--target=${{ matrix.clang_target}} -fPIE -fPIC"
+          export CFLAGS="--target=${{ matrix.clang_target}} -fPIE -fPIC -D__ANDROID__"
           export LDFLAGS="--target=${{ matrix.clang_target}} -pie"
+          export PREFIX="/system"
+          
+          echo "Using compiler: $CC"
+          $CC --version
           
           # Build for Android
           make clean
-          make ENABLE_LTO=0 \
+          make ENABLE_BRAIN=0 \
+               ENABLE_LTO=0 \
                CC="$CC" \
                CXX="$CXX" \
                AR="$AR" \
-               STRIP="$STRIP"
+               STRIP="$STRIP" \
+               RANLIB="$RANLIB"
+
+      - name: Test binary
+        run: |
+          cd hashcat
+          file hashcat
+          # Check if binary is Android compatible
+          $NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -h hashcat | grep "Machine\|Class" || true
 
       - name: Create Android binary package
         run: |
@@ -65,6 +79,7 @@ jobs:
           echo "Arch: ${{ matrix.arch }}" > ../android-package/${{ matrix.arch }}/version.txt
           echo "Target: ${{ matrix.target }}" >> ../android-package/${{ matrix.arch }}/version.txt
           echo "Build: $(date -u)" >> ../android-package/${{ matrix.arch }}/version.txt
+          ./hashcat --version >> ../android-package/${{ matrix.arch }}/version.txt 2>/dev/null || echo "Version check failed" >> ../android-package/${{ matrix.arch }}/version.txt
 
       - name: Upload Android binaries
         uses: actions/upload-artifact@v4
@@ -72,65 +87,3 @@ jobs:
           name: hashcat-android-${{ matrix.arch }}
           path: android-package/${{ matrix.arch }}/
           retention-days: 30
-
-  create-android-release:
-    name: Create Android Release
-    runs-on: ubuntu-latest
-    needs: build-android
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
-    
-    steps:
-      - name: Download all Android artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts/
-
-      - name: Create combined release package
-        run: |
-          mkdir -p hashcat-android
-          cp -r artifacts/hashcat-android-arm64/* hashcat-android/ 2>/dev/null || true
-          cp -r artifacts/hashcat-android-arm/* hashcat-android/ 2>/dev/null || true
-          
-          # Create README
-          cat > hashcat-android/README-Android.md << 'EOF'
-          # Hashcat for Android
-          
-          Pre-built hashcat binaries for Android/Termux
-          
-          ## Supported Architectures:
-          - ARM64 (aarch64)
-          - ARM (armv7a)
-          
-          ## Usage in Termux:
-          ```bash
-          chmod +x hashcat
-          ./hashcat --version
-          ```
-          
-          Built from: https://github.com/ahmed-alnassif/hashcat-android
-          EOF
-          
-          tar -czf hashcat-android-binaries.tar.gz hashcat-android/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: android-${{ github.sha }}
-          name: "Hashcat Android Binaries"
-          body: |
-            Pre-built hashcat binaries for Android/Termux
-            
-            **Architectures:**
-            - ✅ ARM64 (aarch64)
-            - ✅ ARM (armv7a)
-            
-            **Usage:**
-            ```bash
-            tar -xzf hashcat-android-binaries.tar.gz
-            cd hashcat-android
-            chmod +x hashcat
-            ./hashcat --version
-            ```
-            
-            **Source:** https://github.com/ahmed-alnassif/hashcat-android
-          files: hashcat-android-binaries.tar.gz
