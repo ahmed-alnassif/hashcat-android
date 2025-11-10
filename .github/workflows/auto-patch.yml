@@ -1,0 +1,78 @@
+name: Auto-Patch Hashcat
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  auto-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hashcat-android repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Get full history for better git operations
+
+      - name: Get latest hashcat commit
+        id: hashcat-commit
+        run: |
+          LATEST_COMMIT=$(git ls-remote https://github.com/hashcat/hashcat.git HEAD | cut -f1)
+          echo "latest_commit=$LATEST_COMMIT" >> $GITHUB_OUTPUT
+          echo "Latest hashcat commit: $LATEST_COMMIT"
+
+      - name: Check if already processed
+        id: check-processed
+        run: |
+          if [ -f "last-processed-commit.txt" ] && grep -q "${{ steps.hashcat-commit.outputs.latest_commit }}" last-processed-commit.txt; then
+            echo "already_processed=true" >> $GITHUB_OUTPUT
+            echo "✅ Already processed this commit"
+          else
+            echo "already_processed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip if already processed
+        if: steps.check-processed.outputs.already_processed == 'true'
+        run: echo "No new commits to process" && exit 0
+
+      - name: Download patches
+        run: |
+          wget -q https://github.com/ahmed-alnassif/hashcat-patches/archive/main.tar.gz -O patches.tar.gz
+          tar -xzf patches.tar.gz
+          mv hashcat-patches-main hashcat-patches
+          echo "📦 Patches downloaded"
+
+      - name: Clone and patch latest hashcat
+        run: |
+          rm -rf hashcat
+          git clone https://github.com/hashcat/hashcat.git hashcat
+          cd hashcat
+          git checkout ${{ steps.hashcat-commit.outputs.latest_commit }}
+          
+          echo "🔧 Applying Android patches..."
+          sed -i -f "../hashcat-patches/patches/android-make.sed" src/Makefile
+          sed -i -f "../hashcat-patches/patches/android-support.sed" src/affinity.c
+          sed -i -f "../hashcat-patches/patches/build.sed" BUILD.md
+          cp "../hashcat-patches/copy/BUILD_Android.md" ./
+          rm -rf .git
+          
+          echo "✅ Source patched successfully"
+
+      - name: Clean up patches
+        run: rm -rf hashcat-patches patches.tar.gz
+
+      - name: Commit patched source
+        run: |
+          git add -A
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git commit -m "Auto-patch: hashcat ${{ steps.hashcat-commit.outputs.latest_commit }}"
+
+      - name: Update commit tracker
+        run: |
+          echo "${{ steps.hashcat-commit.outputs.latest_commit }}" > last-processed-commit.txt
+          git add last-processed-commit.txt
+          git commit -m "Track: ${{ steps.hashcat-commit.outputs.latest_commit }}" || echo "No new changes"
+
+      - name: Push updates
+        run: git push
