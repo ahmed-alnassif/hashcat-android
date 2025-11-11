@@ -68,6 +68,7 @@ jobs:
       - name: Build hashcat for Android
         run: |
           cd hashcat
+          make clean || true
           make ENABLE_BRAIN=0 ENABLE_LTO=0 ENABLE_UNRAR=0 \
                CC="$CC" \
                CXX="$CXX" \
@@ -75,14 +76,14 @@ jobs:
                STRIP="$STRIP" \
                RANLIB="$RANLIB" \
                LFLAGS_NATIVE="--target=$TARGET --sysroot=$SYSROOT -pie -static -L$ANDROID_LIB_DIR -lc -lm -ldl -lz" \
+               CFLAGS_NATIVE="--target=$TARGET --sysroot=$SYSROOT -fPIE -fPIC -D__ANDROID__ -march=armv8-a+sha2 -O2 -fomit-frame-pointer -pipe" \
                CFLAGS="--target=$TARGET --sysroot=$SYSROOT -fPIE -fPIC -D__ANDROID__ -march=armv8-a+sha2 -O2 -fomit-frame-pointer -pipe -Iinclude/ -IOpenCL/ -Ideps/LZMA-SDK/C -Ideps/zlib -Ideps/zlib/contrib -Ideps/OpenCL-Headers -Ideps/xxHash -DWITH_CUBIN -Ideps/sse2neon -DSSE2NEON_SUPPRESS_WARNINGS"
 
       - name: Verify binary architecture
         run: |
           cd hashcat
           file hashcat
-          # Just check it's ARM Android, don't try to run it
-
+ 
       - name: Create Android package
         run: |
           cd hashcat
