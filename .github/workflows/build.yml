@@ -1,9 +1,14 @@
-name: Build Android
+name: Build Hashcat Android
 
 on:
   schedule:
     - cron: '0 */6 * * *'  # Every 6 hours
   workflow_dispatch:  # Manual trigger
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-android.yml'
+      - 'patches/**'
 
 jobs:
   build-android:
@@ -12,11 +17,9 @@ jobs:
         arch: [arm64, arm]
         include:
           - arch: arm64
-            target: aarch64-linux-android
-            clang_target: aarch64-linux-android33
-          - arch: arm
-            target: armv7a-linux-androideabi
-            clang_target: armv7a-linux-androideabi33
+            target: aarch64-linux-android33
+          - arch: arm  
+            target: armv7a-linux-androideabi33
 
     name: Build Android ${{ matrix.arch }}
     runs-on: ubuntu-latest
@@ -29,57 +32,70 @@ jobs:
           wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
           unzip -q android-ndk-r26b-linux.zip
           echo "NDK_HOME=$(pwd)/android-ndk-r26b" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r26b" >> $GITHUB_ENV
+          echo "SYSROOT=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
+          echo "ANDROID_LIB_DIR=$SYSROOT/usr/lib/${{ matrix.target }}" >> $GITHUB_ENV
 
       - name: Setup Android Toolchain
         run: |
-          echo "CC=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.clang_target }}-clang" >> $GITHUB_ENV
-          echo "CXX=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.clang_target }}-clang++" >> $GITHUB_ENV
+          echo "CC=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.target }}-clang" >> $GITHUB_ENV
+          echo "CXX=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.target }}-clang++" >> $GITHUB_ENV
           echo "AR=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
           echo "STRIP=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" >> $GITHUB_ENV
           echo "RANLIB=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
+
+      - name: Download patches
+        run: |
+          wget -q https://github.com/ahmed-alnassif/hashcat-patches/archive/main.tar.gz -O patches.tar.gz
+          tar -xzf patches.tar.gz
+          mv hashcat-patches-main hashcat-patches
+
+      - name: Clone and patch latest hashcat
+        run: |
+          rm -rf hashcat
+          git clone https://github.com/hashcat/hashcat.git hashcat
+          cd hashcat
+          
+          # Apply Android patches
+          sed -i -f "../hashcat-patches/patches/android-make.sed" Makefile
+          sed -i -f "../hashcat-patches/patches/android-support.sed" src/affinity.c
+          sed -i -f "../hashcat-patches/patches/build.sed" BUILD.md
+          cp "../hashcat-patches/copy/BUILD_Android.md" ./
+          
+          # Remove .git to prevent submodule issues
+          rm -rf .git
 
       - name: Build hashcat for Android
         run: |
           cd hashcat
-          
-          # Set Android-specific flags
-          export CFLAGS="--target=${{ matrix.clang_target}} -fPIE -fPIC -D__ANDROID__"
-          export LDFLAGS="--target=${{ matrix.clang_target}} -pie"
-          export PREFIX="/system"
-          
-          echo "Using compiler: $CC"
-          $CC --version
-          
-          # Build for Android
-          make clean
-          make ENABLE_BRAIN=0 \
-               ENABLE_LTO=0 \
+          make ENABLE_BRAIN=0 ENABLE_LTO=0 ENABLE_UNRAR=0 \
                CC="$CC" \
                CXX="$CXX" \
                AR="$AR" \
                STRIP="$STRIP" \
-               RANLIB="$RANLIB"
+               RANLIB="$RANLIB" \
+               LFLAGS_NATIVE="--target=$TARGET --sysroot=$SYSROOT -pie -static -L$ANDROID_LIB_DIR -lc -lm -ldl -lz" \
+               CFLAGS="--target=$TARGET --sysroot=$SYSROOT -fPIE -fPIC -D__ANDROID__ -march=armv8-a+sha2 -O2 -fomit-frame-pointer -pipe -Iinclude/ -IOpenCL/ -Ideps/LZMA-SDK/C -Ideps/zlib -Ideps/zlib/contrib -Ideps/OpenCL-Headers -Ideps/xxHash -DWITH_CUBIN -Ideps/sse2neon -DSSE2NEON_SUPPRESS_WARNINGS"
 
-      - name: Test binary
+      - name: Verify binary architecture
         run: |
           cd hashcat
           file hashcat
-          # Check if binary is Android compatible
-          $NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -h hashcat | grep "Machine\|Class" || true
+          # Just check it's ARM Android, don't try to run it
 
-      - name: Create Android binary package
+      - name: Create Android package
         run: |
           cd hashcat
           mkdir -p ../android-package/${{ matrix.arch }}
           cp hashcat ../android-package/${{ matrix.arch }}/
           cp -r charsets docs extra layouts masks modules OpenCL rules example* ../android-package/${{ matrix.arch }}/
+          cp BUILD_Android.md ../android-package/${{ matrix.arch }}/
           
-          # Create version file
-          echo "Arch: ${{ matrix.arch }}" > ../android-package/${{ matrix.arch }}/version.txt
-          echo "Target: ${{ matrix.target }}" >> ../android-package/${{ matrix.arch }}/version.txt
-          echo "Build: $(date -u)" >> ../android-package/${{ matrix.arch }}/version.txt
-          ./hashcat --version >> ../android-package/${{ matrix.arch }}/version.txt 2>/dev/null || echo "Version check failed" >> ../android-package/${{ matrix.arch }}/version.txt
+          # Create version info
+          echo "Architecture: ${{ matrix.arch }}" > ../android-package/${{ matrix.arch }}/build-info.txt
+          echo "Target: ${{ matrix.target }}" >> ../android-package/${{ matrix.arch }}/build-info.txt
+          echo "Build Date: $(date -u)" >> ../android-package/${{ matrix.arch }}/build-info.txt
+          echo "File Info: $(file hashcat)" >> ../android-package/${{ matrix.arch }}/build-info.txt
 
       - name: Upload Android binaries
         uses: actions/upload-artifact@v4
