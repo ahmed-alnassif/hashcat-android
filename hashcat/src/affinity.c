@@ -11,6 +11,10 @@
 #include <sched.h>
 #include <unistd.h>
 #endif
+#if defined(__ANDROID__)
+#include <sched.h>
+#include <unistd.h>
+#endif
 #include "affinity.h"
 
 #if defined (__APPLE__)
@@ -188,9 +192,13 @@ int set_cpu_affinity (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx)
   #if defined(__ANDROID__)
     const int rc = sched_setaffinity (gettid(), sizeof (cpu_set_t), &cpuset);
   #else
+  #if defined(__ANDROID__)
+    const int rc = sched_setaffinity (gettid(), sizeof (cpu_set_t), &cpuset);
+  #else
     const int rc = pthread_setaffinity_np (thread, sizeof (cpu_set_t), &cpuset);
   #endif
-
+  #endif
+  
   if (rc != 0)
   {
     event_log_error (hashcat_ctx, "pthread_setaffinity_np() failed with error: %d", rc);

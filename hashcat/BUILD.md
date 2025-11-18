@@ -125,6 +125,7 @@ See: [BUILD_Docker.md](BUILD_Docker.md)
 
 | Method                                 | Documentation                        |
 |----------------------------------------|--------------------------------------|
+| Android                                | [BUILD_Android.md](BUILD_Android.md) |
 | From macOS                             | [BUILD_macOS.md](BUILD_macOS.md)     |
 | Android                             | [BUILD_Android.md](BUILD_Android.md)   |
 | Using Windows Subsystem for Linux (WSL)| [BUILD_WSL.md](BUILD_WSL.md)         |
